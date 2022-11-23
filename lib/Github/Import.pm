@@ -4,6 +4,7 @@ use Moose;
 use Moose::Util::TypeConstraints qw(enum);
 use MooseX::Types::Path::Class qw(Dir File);
 use Carp qw(croak);
+use JSON;
 
 use namespace::clean -except => 'meta';
 
@@ -95,16 +96,16 @@ sub _build_token {
     $self->_conf_var('github-import.token') || $self->_conf_var('github.token') || croak "'token' is required";
 }
 
-has ssl => (
+has public => (
     traits        => [qw(Getopt)],
     is            => 'ro',
     isa           => 'Bool',
     lazy_build    => 1,
-    documentation => "use https instead of http",
-    cmd_aliases   => "S",
+    documentation => "If creating a repository, create a public repository (default is private)",
+    cmd_aliases   => "x",
 );
 
-sub _build_ssl { shift->_conf_bool('github-import.ssl', 0) }
+sub _build_public { shift->_conf_bool('github-import.public', 0) }
 
 has dry_run => (
     traits      => [qw(Getopt)],
@@ -369,26 +370,26 @@ sub do_create {
     require URI;
     require HTTP::Request::Common;
 
-    my $uri = URI->new('http://github.com/repositories');
-
-    $uri->scheme("https") if $self->ssl;
+    my $uri = URI->new('https://api.github.com/user/repos');
 
     unless ( $self->dry_run ) {
         my $res = $self->user_agent->request(
-            HTTP::Request::Common::POST( $uri, [
-                'commit'             => 'Create repository',
-                'login'              => $self->username,
-                'token'              => $self->token,
-                'repository[name]'   => $self->project_name,
-                'repository[public]' => 'true',
-                $self->has_description ? ( 'repository[description]' => $self->description ) : (),
-                $self->has_homepage    ? ( 'repository[homepage]'    => $self->homepage    ) : (),
-            ]),
-        );
+            HTTP::Request::Common::POST($uri,
+            'Accept' => 'application/vnd.github+json',
+            'Authorization' => "Bearer " . $self->token,
+            Content => 
+            encode_json({
+                'name'    => $self->project_name,
+                'private' => $self->public ? JSON::false : JSON::true,
+                $self->has_description ? ( 'description' => $self->description ) : (),
+                $self->has_homepage ? ( 'homepage' => $self->homepage ) : (),
+            })
+        ));
 
         # XXX: not sure how to detect errors here, other than the obvious
         $self->err('Error creating project: ' . $res->status_line) unless $res->is_success;
     }
+    
     return $uri->scheme . '://github.com/' . $self->github_path;
 };
 
